@@ -2,412 +2,293 @@ import pygame # Library for making games and graphics
 import socket # Library for network communication
 import pickle # Library for converting Python objects to bytes and back
 import threading # Library for running multiple tasks at once
-import time # Library for time-related functions (like pausing)
-import hashlib # Library for creating secure "fingerprints" of data (like passwords)
-import ssl # Library for secure network communication (TLS/SSL)
-import struct # Library for packing/unpacking binary data (like message lengths)
-import os # Library for interacting with the operating system (like file paths)
-from logger_util import Logger # Our custom logging class
-from pyfonts import load_font # Library to load fonts from Google Fonts
+import time # Library for time-related functions
+import hashlib # Library for password hashing
+import ssl # Library for secure communication
+import struct # Library for packing message headers
+import os # Library for file paths
+from logger_util import Logger # Custom logging
+from pyfonts import load_font # Google Fonts loader
 
-# --- Game Configuration ---
-WIDTH = 30 # Number of tiles horizontally in the maze
-HEIGHT = 30 # Number of tiles vertically in the maze
-TILE_SIZE = 20 # Size of each tile in pixels (e.g., 20x20 pixels)
-PORT = 5555 # The network port the server is listening on
-SERVER = "127.0.0.1" # The IP address of the server (localhost for testing)
-CONTROLS_HEIGHT = 150 # Extra space at the bottom of the screen for UI elements
+# --- Config ---
+WIDTH, HEIGHT = 30, 30
+TILE_SIZE = 20
+PORT, SERVER = 5555, "127.0.0.1"
+CONTROLS_HEIGHT = 150
+MOVE_DELAY = 0.15 # Seconds between moves when holding a key
 
-# Colors used in the game
 COLORS = {
-    0: (7, 168, 124),     # Wall color (Teal-Green)
-    1: (200, 200, 200),  # Path color (Light Gray)
-    2: (0, 255, 0),      # Food color (Fallback if icon not loaded)
-    3: (255, 0, 0),      # Poison color (Fallback if icon not loaded)
-    9: (0, 0, 255),      # Exit color (Blue)
+    0: (7, 168, 124), 1: (200, 200, 200), 2: (0, 255, 0),
+    3: (255, 0, 0), 9: (0, 0, 255)
 }
 
-# --- UI Element Base Class ---
 class UIElement:
-    """
-    A base class for any interactive element on the screen (buttons, input fields).
-    It defines common properties like position and color.
-    """
     def __init__(self, rect, color):
-        self.rect = pygame.Rect(rect) # The rectangular area of the element
-        self.color = color # The main color of the element
+        self.rect = pygame.Rect(rect)
+        self.color = color
+    def draw(self, screen, font): pass
+    def handle_event(self, event): return False
 
-    def draw(self, screen, font):
-        """Draws the element on the screen. To be implemented by child classes."""
-        pass
-
-    def handle_event(self, event):
-        """Handles user input (like clicks or typing). To be implemented by child classes."""
-        return False
-
-# --- Button Class ---
 class Button(UIElement):
-    """A clickable button that performs an action when pressed."""
     def __init__(self, rect, text, action_val):
-        super().__init__(rect, (100, 100, 100)) # Call UIElement's constructor
-        self.text = text # Text displayed on the button
-        self.action_val = action_val # Value returned when button is clicked (e.g., "UP", "LOGIN")
-
+        super().__init__(rect, (100, 100, 100))
+        self.text, self.action_val = text, action_val
     def draw(self, screen, font):
-        """Draws the button's rectangle and its text."""
-        pygame.draw.rect(screen, self.color, self.rect, border_radius=8) # Draw the button's background
-        t = font.render(self.text, True, (255, 255, 255)) # Render the text
-        screen.blit(t, t.get_rect(center=self.rect.center)) # Draw text in the center of the button
-
+        pygame.draw.rect(screen, self.color, self.rect, border_radius=8)
+        t = font.render(self.text, True, (255, 255, 255))
+        screen.blit(t, t.get_rect(center=self.rect.center))
     def handle_event(self, event):
-        """Checks if the button was clicked."""
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1: # If left mouse button was pressed
-            if self.rect.collidepoint(event.pos): # And the mouse was over this button
-                return self.action_val # Return the action value
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.rect.collidepoint(event.pos): return self.action_val
         return False
 
-# --- Input Field Class ---
 class InputField(UIElement):
-    """A box where the user can type text, like for username or password."""
     def __init__(self, rect, label, is_password=False):
         super().__init__(rect, (255, 255, 255))
-        self.label = label # Text label next to the input box (e.g., "USER:")
-        self.text = "" # Current text typed by the user
-        self.active = False # True if this field is currently being typed into
-        self.is_password = is_password # If true, display '*' instead of actual text
-
+        self.label, self.text = label, ""
+        self.active, self.is_password = False, is_password
     def draw(self, screen, font):
-        """Draws the label, the input box, and the user's text (or asterisks for password)."""
-        # Highlight color if active, otherwise a dimmer color
         color = (255, 255, 0) if self.active else (150, 150, 150)
-        # Display '*' for passwords, otherwise display actual text
-        disp_text = "*" * len(self.text) if self.is_password else self.text
-        
-        # Draw the label (e.g., "USER:")
-        label_img = font.render(f"{self.label}:", True, (200, 200, 200))
-        screen.blit(label_img, (self.rect.x - 130, self.rect.y + 5)) # Position label to the left
-        
-        # Draw the input box background and border
+        disp = "*" * len(self.text) if self.is_password else self.text
+        screen.blit(font.render(f"{self.label}:", True, (200, 200, 200)), (self.rect.x - 130, self.rect.y + 5))
         pygame.draw.rect(screen, (50, 50, 50), self.rect)
-        pygame.draw.rect(screen, color, self.rect, 2) # Border color changes based on active state
-        
-        # Draw the actual text inside the input box
-        text_img = font.render(disp_text, True, (255, 255, 255))
-        screen.blit(text_img, (self.rect.x + 5, self.rect.y + 5))
-
+        pygame.draw.rect(screen, color, self.rect, 2)
+        screen.blit(font.render(disp, True, (255, 255, 255)), (self.rect.x + 5, self.rect.y + 5))
     def handle_event(self, event):
-        """Handles mouse clicks (to activate/deactivate) and keyboard input."""
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            # Check if the mouse clicked on this input field
-            self.active = self.rect.collidepoint(event.pos)
+        if event.type == pygame.MOUSEBUTTONDOWN: self.active = self.rect.collidepoint(event.pos)
         if self.active and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_BACKSPACE: # If Backspace is pressed, remove last character
-                self.text = self.text[:-1]
-            else:
-                # Add the typed character if it's a single character
-                if len(event.unicode) == 1:
-                    self.text += event.unicode
+            if event.key == pygame.K_BACKSPACE: self.text = self.text[:-1]
+            elif len(event.unicode) == 1: self.text += event.unicode
         return False
 
-# --- Connection Manager Class ---
 class ConnectionManager:
-    """
-    Handles all network communication with the server, including SSL setup,
-    sending/receiving data, and managing the connection state.
-    """
     def __init__(self, logger):
-        self.logger = logger # Our logger instance
-        # Setup SSL context for secure communication
+        self.logger, self.my_id, self.client, self.is_host = logger, None, None, False
         self.context = ssl.create_default_context()
-        self.context.check_hostname = False # Disable hostname check for self-signed certs
-        self.context.verify_mode = ssl.CERT_NONE # Disable certificate verification for self-signed certs
-        self.my_id = None # Player ID assigned by the server
-        self.client = None # The SSL-wrapped socket connection
+        self.context.check_hostname, self.context.verify_mode = False, ssl.CERT_NONE
 
     def _recv_all(self, n):
-        """
-        Helper function to ensure all 'n' bytes of a message are received.
-        TCP can split messages, so this loops until the full message arrives.
-        """
         data = b''
         while len(data) < n:
-            try:
-                packet = self.client.recv(n - len(data)) # Try to receive remaining bytes
-                if not packet: # If no data, connection is likely closed
-                    return None
-                data += packet
-            except:
-                return None
+            packet = self.client.recv(n - len(data))
+            if not packet: return None
+            data += packet
         return data
 
     def get_leaderboard_data(self):
-        """
-        Connects to the server briefly to fetch the current leaderboard
-        before the user logs in.
-        """
         try:
-            # Create a temporary socket just for this request
-            temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            ssl_sock = self.context.wrap_socket(temp_socket, server_hostname=SERVER)
-            ssl_sock.connect((SERVER, PORT))
-            
-            # Send a special request for the leaderboard
-            ssl_sock.sendall(pickle.dumps({"leaderboard_request": True}))
-            
-            # Receive the leaderboard data
-            data = pickle.loads(ssl_sock.recv(4096))
-            ssl_sock.close() # Close the temporary connection
-            return data.get("leaderboard", [])
-        except Exception as e:
-            self.logger.log(f"Error fetching leaderboard: {e}")
-            return []
+            s = self.context.wrap_socket(socket.socket(), server_hostname=SERVER)
+            s.connect((SERVER, PORT))
+            s.sendall(pickle.dumps({"leaderboard_request": True}))
+            d = pickle.loads(s.recv(4096)); s.close()
+            return d.get("leaderboard", [])
+        except: return []
 
-    def attempt_login(self, username, password):
-        """
-        Connects to the server, sends login credentials, and processes the server's response.
-        """
+    def attempt_login(self, user, pw):
         try:
-            # Create a new raw socket and wrap it in SSL
-            raw_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client = self.context.wrap_socket(raw_socket, server_hostname=SERVER)
-            self.client.connect((SERVER, PORT)) # Connect to the server
-            
-            # Hash the password securely before sending it
-            hashed_pw = hashlib.sha256(password.encode()).hexdigest()
-            
-            # Send username and hashed password to the server
-            self.client.sendall(pickle.dumps({"username": username, "password": hashed_pw}))
-            
-            # Receive the server's response (success/fail)
-            resp_bytes = self.client.recv(4096)
-            if not resp_bytes: return False
-            resp = pickle.loads(resp_bytes)
-            
+            self.client = self.context.wrap_socket(socket.socket(), server_hostname=SERVER)
+            self.client.connect((SERVER, PORT))
+            self.client.sendall(pickle.dumps({"username": user, "password": hashlib.sha256(pw.encode()).hexdigest()}))
+            resp = pickle.loads(self.client.recv(1024))
             if resp.get("status") == "success":
-                self.my_id = resp["id"] # Store the player ID assigned by the server
+                self.my_id, self.is_host = resp["id"], resp.get("is_host", False)
                 return True
-        except Exception as e:
-            self.logger.log(f"Login attempt failed: {e}")
+        except: pass
         return False
+
+    def select_player_count(self, count):
+        try: self.client.sendall(pickle.dumps({"player_count": count}))
+        except: pass
+
+    def send_move(self, move):
+        try: self.client.sendall(move.encode())
+        except: pass
 
     def receive_data(self):
-        """
-        Receives a full message from the server, handling the length-prefix header.
-        """
         try:
-            # Read the 4-byte header to get the message length
-            header = self._recv_all(4)
-            if not header: return None
-            length = struct.unpack(">I", header)[0] # Unpack the 4 bytes into an integer
-            
-            # Receive the full message data based on the length
-            data = self._recv_all(length)
-            if not data: return None
-            
-            return pickle.loads(data) # Convert bytes back to a Python object
-        except:
-            return None
+            h = self._recv_all(4)
+            if not h: return None
+            return pickle.loads(self._recv_all(struct.unpack(">I", h)[0]))
+        except: return None
 
-# --- Game Renderer Class ---
 class GameRenderer:
-    """
-    Handles all drawing operations on the Pygame screen.
-    """
     def __init__(self, screen, font):
-        self.screen = screen # The Pygame display surface
-        self.font = font # The main font used for text
-
-    def draw_leaderboard(self, leaderboard, x, y):
-        """Draws the leaderboard (top 3 players) on the screen."""
-        self.draw_text("LEADERBOARD", x, y, (255, 255, 0)) # Title
-        for i, entry in enumerate(leaderboard):
-            # Display rank, username, and score
-            text = f"{i+1}.{entry['name']}:{entry['score']}"
-            self.draw_text(text, x, y + 30 + (i * 30), (255, 255, 255))
-
-    def draw_text(self, text, x, y, color=(255, 255, 255), centered=False):
-        """Helper to draw text on the screen."""
-        img = self.font.render(text, True, color)
-        rect = img.get_rect()
-        if centered: rect.center = (x, y)
-        else: rect.topleft = (x, y)
-        self.screen.blit(img, rect)
-
-    def render_login(self, user_field, pass_field, login_btn, leaderboard):
-        """Draws the login screen."""
+        self.screen, self.font = screen, font
+    def draw_txt(self, t, x, y, c=(255, 255, 0), center=False):
+        img = self.font.render(t, True, c)
+        r = img.get_rect(center=(x, y)) if center else img.get_rect(topleft=(x, y))
+        self.screen.blit(img, r)
+    def render_login(self, u, p, b, lb):
         self.screen.fill((30, 30, 30))
-        self.draw_text("MAZE LOGIN", WIDTH * TILE_SIZE // 2, 60, (0, 255, 255), centered=True)
-        self.draw_leaderboard(leaderboard, WIDTH * TILE_SIZE - 200, 20)
-        user_field.draw(self.screen, self.font)
-        pass_field.draw(self.screen, self.font)
-        login_btn.draw(self.screen, self.font)
+        self.draw_txt("LOGIN", WIDTH*TILE_SIZE//2, 60, center=True)
+        self.draw_txt("LEADERBOARD", WIDTH*TILE_SIZE-200, 20)
+        for i, e in enumerate(lb): self.draw_txt(f"{i+1}.{e['name']}:{e['score']}", WIDTH*TILE_SIZE-200, 50+i*30, (255,255,255))
+        u.draw(self.screen, self.font); p.draw(self.screen, self.font); b.draw(self.screen, self.font)
         pygame.display.flip()
-
-    def render_color_selection(self, options):
-        """Draws the screen where players choose their icon color."""
+    def render_selection(self, btns):
         self.screen.fill((0, 0, 0))
-        self.draw_text("CHOOSE YOUR COLOR", WIDTH * TILE_SIZE // 2, 100, (255, 255, 255), centered=True)
-        for opt in options:
-            pygame.draw.rect(self.screen, opt['color'], opt['rect'])
-            pygame.draw.rect(self.screen, (255, 255, 255), opt['rect'], 2)
+        self.draw_txt("HOW MANY PLAYERS?", WIDTH*TILE_SIZE//2, 100, center=True)
+        for b in btns: b.draw(self.screen, self.font)
         pygame.display.flip()
-
-    def render_winner(self, winner_name, leaderboard):
-        """Draws the winner announcement screen."""
+    def render_waiting(self, current, target):
         self.screen.fill((0, 0, 0))
-        mid_x = WIDTH * TILE_SIZE // 2
-        mid_y = (HEIGHT * TILE_SIZE + CONTROLS_HEIGHT) // 2
-        self.draw_text(f"THE WINNER IS", mid_x, mid_y - 80, (255, 255, 0), centered=True)
-        self.draw_text(winner_name.upper(), mid_x, mid_y - 40, (255, 255, 255), centered=True)
-        self.draw_leaderboard(leaderboard, mid_x - 80, mid_y + 10)
+        self.draw_txt("WAITING ROOM", WIDTH*TILE_SIZE//2, 100, center=True)
+        self.draw_txt(f"CONNECTED: {current} / {target}", WIDTH*TILE_SIZE//2, 200, (255,255,255), center=True)
         pygame.display.flip()
-
-    def render_game(self, current_map, scores, my_id, move_btns, player_icon, food_icon, poison_icon):
-        """Draws the main game screen: maze, players, items, and UI."""
+    def render_color(self, opts):
+        self.screen.fill((0, 0, 0))
+        self.draw_txt("CHOOSE YOUR COLOR", WIDTH*TILE_SIZE//2, 100, (255,255,255), center=True)
+        for o in opts:
+            pygame.draw.rect(self.screen, o['color'], o['rect'])
+            pygame.draw.rect(self.screen, (255,255,255), o['rect'], 2)
+        pygame.display.flip()
+    def render_winner(self, name, lb, next_btn, waiting):
+        self.screen.fill((0, 0, 0))
+        mx, my = WIDTH*TILE_SIZE//2, (HEIGHT*TILE_SIZE+CONTROLS_HEIGHT)//2
+        self.draw_txt("THE WINNER IS", mx, my-80, (255, 255, 0), True)
+        self.draw_txt(name.upper(), mx, my-40, (255, 255, 255), True)
+        for i, e in enumerate(lb): self.draw_txt(f"{i+1}.{e['name']}:{e['score']}", mx-80, my+10+i*30, (255,255,255))
+        if waiting:
+            self.draw_txt("WAITING FOR OTHER PLAYERS...", mx, my+130, (0, 255, 255), center=True)
+        else:
+            next_btn.draw(self.screen, self.font)
+        pygame.display.flip()
+    def render_game(self, m, s, mid, p_i, f_i, ps_i):
         self.screen.fill((20, 20, 20))
-        if current_map:
+        if m:
             for y in range(HEIGHT):
                 for x in range(WIDTH):
-                    val = current_map[y][x]
-                    rx, ry = x * TILE_SIZE, y * TILE_SIZE
-                    
-                    if val >= 10: # Player
+                    v, rx, ry = m[y][x], x*TILE_SIZE, y*TILE_SIZE
+                    if v >= 10:
                         pygame.draw.rect(self.screen, COLORS[1], (rx, ry, TILE_SIZE, TILE_SIZE))
-                        if val == my_id: # YOU
-                            self.screen.blit(player_icon, (rx, ry))
-                        else: # OTHERS
-                            pygame.draw.circle(self.screen, (255, 165, 0), (rx+TILE_SIZE//2, ry+TILE_SIZE//2), TILE_SIZE//2-2)
-                    elif val == 2: # Food
+                        if v == mid: self.screen.blit(p_i, (rx, ry))
+                        else: pygame.draw.circle(self.screen, (255, 165, 0), (rx+TILE_SIZE//2, ry+TILE_SIZE//2), TILE_SIZE//2-2)
+                    elif v in [2, 3]:
                         pygame.draw.rect(self.screen, COLORS[1], (rx, ry, TILE_SIZE, TILE_SIZE))
-                        self.screen.blit(food_icon, (rx, ry))
-                    elif val == 3: # Poison
-                        pygame.draw.rect(self.screen, COLORS[1], (rx, ry, TILE_SIZE, TILE_SIZE))
-                        self.screen.blit(poison_icon, (rx, ry))
-                    elif val == 9: # Exit (Blinking)
-                        color = COLORS[9] if int(time.time()*2)%2==0 else COLORS[1]
-                        pygame.draw.rect(self.screen, color, (rx, ry, TILE_SIZE, TILE_SIZE))
-                    else: # Walls or empty path
-                        pygame.draw.rect(self.screen, COLORS.get(val, (127, 127, 127)), (rx, ry, TILE_SIZE, TILE_SIZE))
-            
-            # Score and Buttons
-            my_score = scores.get(my_id, 0)
-            self.draw_text(f"SCORE: {my_score}", 10, HEIGHT * TILE_SIZE + 10, (0, 255, 255))
-            for btn in move_btns: btn.draw(self.screen, self.font)
+                        self.screen.blit(f_i if v==2 else ps_i, (rx, ry))
+                    elif v == 9: pygame.draw.rect(self.screen, COLORS[9] if int(time.time()*2)%2==0 else COLORS[1], (rx, ry, TILE_SIZE, TILE_SIZE))
+                    else: pygame.draw.rect(self.screen, COLORS.get(v, (127, 127, 127)), (rx, ry, TILE_SIZE, TILE_SIZE))
+            self.draw_txt(f"SCORE: {s.get(mid, 0)}", 10, HEIGHT*TILE_SIZE+10, (0, 255, 255))
         pygame.display.flip()
 
-# --- Main Maze Client Class ---
 class MazeClient:
     def __init__(self):
-        self.logger = Logger("client")
-        pygame.init() # Must be called before loading fonts
-        
-        # Load the "Passion One" Google Font
-        try:
-            self.main_font = load_font("Passion One", size=24)
-        except:
-            self.main_font = pygame.font.SysFont("Arial", 24, bold=True)
-            
+        self.logger = Logger("client"); pygame.init()
+        try: self.font = load_font("Passion One", size=24)
+        except: self.font = pygame.font.SysFont("Arial", 24, bold=True)
         self.screen = pygame.display.set_mode((WIDTH * TILE_SIZE, (HEIGHT * TILE_SIZE) + CONTROLS_HEIGHT))
-        self.conn = ConnectionManager(self.logger)
-        self.renderer = GameRenderer(self.screen, self.main_font)
-        
-        self.running = True
-        self.current_map, self.scores, self.leaderboard = None, {}, []
-        self.winner_name = None
-        self.player_icon, self.food_icon, self.poison_icon, self.icons = None, None, None, {}
+        self.conn, self.renderer = ConnectionManager(self.logger), GameRenderer(self.screen, self.font)
+        self.running, self.map, self.scores, self.lb, self.winner = True, None, {}, [], None
+        self.p_i, self.f_i, self.ps_i, self.icons, self.wait_info = None, None, None, {}, None
+        self.waiting_for_next = False
+        self.last_move_time = 0
 
     def load_assets(self):
-        """Loads all image sprites from the assets folder."""
-        # Load player sprites
-        for color, file in {'blue': 'blue_player.png', 'green': 'green_player.png', 'pink': 'pink_player.png'}.items():
-            try:
-                img = pygame.image.load(os.path.join('assets', file)).convert_alpha()
-                self.icons[color] = pygame.transform.scale(img, (TILE_SIZE, TILE_SIZE))
+        for c, f in {'blue': 'blue_player.png', 'green': 'green_player.png', 'pink': 'pink_player.png'}.items():
+            try: self.icons[c] = pygame.transform.scale(pygame.image.load(os.path.join('assets', f)).convert_alpha(), (TILE_SIZE, TILE_SIZE))
             except:
-                fb = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
-                pygame.draw.circle(fb, (255, 255, 0), (TILE_SIZE//2, TILE_SIZE//2), TILE_SIZE//2)
-                self.icons[color] = fb
-        # Load item sprites
+                s = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA); pygame.draw.circle(s, (255, 255, 0), (TILE_SIZE//2, TILE_SIZE//2), TILE_SIZE//2); self.icons[c] = s
         try:
-            self.food_icon = pygame.transform.scale(pygame.image.load(os.path.join('assets', 'food.png')).convert_alpha(), (TILE_SIZE, TILE_SIZE))
-            self.poison_icon = pygame.transform.scale(pygame.image.load(os.path.join('assets', 'poison.png')).convert_alpha(), (TILE_SIZE, TILE_SIZE))
+            self.f_i = pygame.transform.scale(pygame.image.load(os.path.join('assets', 'food.png')).convert_alpha(), (TILE_SIZE, TILE_SIZE))
+            self.ps_i = pygame.transform.scale(pygame.image.load(os.path.join('assets', 'poison.png')).convert_alpha(), (TILE_SIZE, TILE_SIZE))
         except:
-            self.food_icon = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA); pygame.draw.circle(self.food_icon, (0, 255, 0), (TILE_SIZE//2, TILE_SIZE//2), TILE_SIZE//4)
-            self.poison_icon = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA); pygame.draw.circle(self.poison_icon, (255, 0, 0), (TILE_SIZE//2, TILE_SIZE//2), TILE_SIZE//4)
+            self.f_i = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA); pygame.draw.circle(self.f_i, (0, 255, 0), (TILE_SIZE//2, TILE_SIZE//2), TILE_SIZE//4)
+            self.ps_i = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA); pygame.draw.circle(self.ps_i, (255, 0, 0), (TILE_SIZE//2, TILE_SIZE//2), TILE_SIZE//4)
 
     def login_loop(self):
-        """Handles the Login screen interaction."""
-        user_field = InputField((220, 200, 200, 40), "USER")
-        pass_field = InputField((220, 260, 200, 40), "PASS", is_password=True)
-        login_btn = Button((250, 340, 140, 50), "LOGIN", "DO_LOGIN")
-        self.leaderboard = self.conn.get_leaderboard_data()
-        
+        u, p = InputField((220, 200, 200, 40), "USER"), InputField((220, 260, 200, 40), "PASS", True)
+        b, self.lb = Button((250, 340, 140, 50), "LOGIN", "L"), self.conn.get_leaderboard_data()
         while self.running:
-            self.renderer.render_login(user_field, pass_field, login_btn, self.leaderboard)
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT: self.running = False; return False
-                user_field.handle_event(event)
-                pass_field.handle_event(event)
-                if login_btn.handle_event(event) == "DO_LOGIN":
-                    if user_field.text and pass_field.text:
-                        if self.conn.attempt_login(user_field.text, pass_field.text): return True
+            self.renderer.render_login(u, p, b, self.lb)
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT: self.running = False; return False
+                u.handle_event(e); p.handle_event(e)
+                if b.handle_event(e) == "L" and u.text and p.text:
+                    if self.conn.attempt_login(u.text, p.text): return True
         return False
 
-    def color_selection_loop(self):
-        """Handles the 'Choose your color' screen."""
-        self.load_assets()
-        sq_size, gap = 60, 20
-        start_x = (WIDTH * TILE_SIZE - (sq_size * 3 + gap * 2)) // 2
-        y = (HEIGHT * TILE_SIZE) // 2
-        opts = [{'color': (0, 0, 255), 'rect': pygame.Rect(start_x, y, sq_size, sq_size), 'id': 'blue'},
-                {'color': (0, 255, 0), 'rect': pygame.Rect(start_x + sq_size + gap, y, sq_size, sq_size), 'id': 'green'},
-                {'color': (255, 105, 180), 'rect': pygame.Rect(start_x + (sq_size + gap) * 2, y, sq_size, sq_size), 'id': 'pink'}]
+    def player_count_loop(self):
+        btns = [Button((100, 200, 100, 100), "2", 2), Button((250, 200, 100, 100), "3", 3), Button((400, 200, 100, 100), "4", 4)]
         while self.running:
-            self.renderer.render_color_selection(opts)
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT: self.running = False; return
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    for opt in opts:
-                        if opt['rect'].collidepoint(event.pos):
-                            self.player_icon = self.icons[opt['id']]
-                            return
+            self.renderer.render_selection(btns)
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT: self.running = False; return
+                for b in btns:
+                    val = b.handle_event(e)
+                    if val: self.conn.select_player_count(val); return
             time.sleep(0.01)
 
-    def background_receiver(self):
-        """Listens for map and score updates from the server in a separate thread."""
+    def color_loop(self):
+        self.load_assets(); sz, g = 60, 20; x = (WIDTH*TILE_SIZE-(sz*3+g*2))//2; y = (HEIGHT*TILE_SIZE)//2
+        opts = [{'color': (0,0,255), 'rect': pygame.Rect(x, y, sz, sz), 'id': 'blue'},
+                {'color': (0,255,0), 'rect': pygame.Rect(x+sz+g, y, sz, sz), 'id': 'green'},
+                {'color': (255,105,180), 'rect': pygame.Rect(x+(sz+g)*2, y, sz, sz), 'id': 'pink'}]
         while self.running:
-            data = self.conn.receive_data()
-            if data:
-                if isinstance(data, dict) and "winner" in data:
-                    self.winner_name = data["winner"]
-                    self.leaderboard = data.get("leaderboard", self.leaderboard)
-                elif isinstance(data, dict):
-                    self.current_map, self.scores = data.get("map", self.current_map), data.get("scores", self.scores)
-                    self.leaderboard = data.get("leaderboard", self.leaderboard)
+            self.renderer.render_color(opts)
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT: self.running = False; return
+                if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                    for o in opts:
+                        if o['rect'].collidepoint(e.pos): self.p_i = self.icons[o['id']]; return
+            time.sleep(0.01)
+
+    def receiver(self):
+        while self.running:
+            d = self.conn.receive_data()
+            if d:
+                if d.get("status") == "waiting": self.wait_info = (d["current"], d["target"])
+                elif d.get("status") == "winner_screen": self.winner, self.lb = d["winner"], d.get("leaderboard", self.lb)
+                elif "winner" in d: self.winner, self.lb = d["winner"], d.get("leaderboard", self.lb)
+                else: 
+                    self.wait_info, self.winner = None, None
+                    self.waiting_for_next = False
+                    self.map, self.scores, self.lb = d.get("map", self.map), d.get("scores", self.scores), d.get("leaderboard", self.lb)
             else: self.running = False
 
     def game_loop(self):
-        """The main gameplay loop."""
-        threading.Thread(target=self.background_receiver, daemon=True).start()
-        cx, cy = (WIDTH * TILE_SIZE) // 2, (HEIGHT * TILE_SIZE) + 70
-        move_btns = [Button((cx-30, cy-35, 60, 50), "U", "UP"), Button((cx-30, cy+25, 60, 50), "D", "DOWN"),
-                Button((cx-100, cy+25, 60, 50), "L", "LEFT"), Button((cx+40, cy+25, 60, 50), "R", "RIGHT")]
+        threading.Thread(target=self.receiver, daemon=True).start()
+        next_btn = Button((WIDTH*TILE_SIZE//2 - 100, (HEIGHT*TILE_SIZE+CONTROLS_HEIGHT)//2 + 100, 200, 50), "NEXT LEVEL", "READY")
+        
         while self.running:
-            if self.winner_name:
-                self.renderer.render_winner(self.winner_name, self.leaderboard)
-                time.sleep(2); self.winner_name = None; continue
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT: self.running = False
-                for btn in move_btns:
-                    move = btn.handle_event(event)
-                    if move: self.conn.client.sendall(move.encode())
-            self.renderer.render_game(self.current_map, self.scores, self.conn.my_id, move_btns, self.player_icon, self.food_icon, self.poison_icon)
+            if self.wait_info:
+                self.renderer.render_waiting(self.wait_info[0], self.wait_info[1])
+                for e in pygame.event.get(): 
+                    if e.type == pygame.QUIT: self.running = False
+                continue
+            
+            if self.winner:
+                self.renderer.render_winner(self.winner, self.lb, next_btn, self.waiting_for_next)
+                for e in pygame.event.get():
+                    if e.type == pygame.QUIT: self.running = False
+                    if not self.waiting_for_next:
+                        if next_btn.handle_event(e) == "READY":
+                            self.conn.send_move("NEXT_LEVEL_READY")
+                            self.waiting_for_next = True
+                continue
+
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT: self.running = False
+
+            keys = pygame.key.get_pressed()
+            current_time = time.time()
+            if current_time - self.last_move_time > MOVE_DELAY:
+                move = None
+                if keys[pygame.K_UP]: move = "UP"
+                elif keys[pygame.K_DOWN]: move = "DOWN"
+                elif keys[pygame.K_LEFT]: move = "LEFT"
+                elif keys[pygame.K_RIGHT]: move = "RIGHT"
+                
+                if move:
+                    self.conn.send_move(move)
+                    self.last_move_time = current_time
+
+            self.renderer.render_game(self.map, self.scores, self.conn.my_id, self.p_i, self.f_i, self.ps_i)
             time.sleep(0.01)
 
     def start(self):
-        """The entry point for the whole client application."""
         if self.login_loop():
-            self.color_selection_loop()
+            if self.conn.is_host: self.player_count_loop()
+            self.color_loop()
             if self.running: self.game_loop()
         pygame.quit()
 

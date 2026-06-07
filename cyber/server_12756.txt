@@ -1,0 +1,2 @@
+[2026-06-07 18:05:12] Logger initialized for server (PID: 12756)
+[2026-06-07 18:05:12] SSL Server Active on 5555
